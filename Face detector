@@ -1,0 +1,139 @@
+import cv2
+import os
+from PIL import Image
+import numpy as np
+
+def generate_dataset(user_id, username):
+    face_classifier = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+
+    def face_cropped(img):
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        faces = face_classifier.detectMultiScale(gray, 1.3, 5)
+
+        if len(faces) == 0:
+            return None
+
+        for (x, y, w, h) in faces:
+            cropped_face = img[y:y+h, x:x+w]
+            return cropped_face
+
+    cap = cv2.VideoCapture(0)
+
+    if not cap.isOpened():
+        print("Error: Could not open webcam.")
+        return
+
+    directory = "data/"
+    if not os.path.exists(directory):
+        os.makedirs(directory)
+
+    img_id = 0
+
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            print("Error: Failed to capture image.")
+            break
+
+        if face_cropped(frame) is not None:
+            img_id += 1
+            face = cv2.resize(face_cropped(frame), (200, 200))
+            face = cv2.cvtColor(face, cv2.COLOR_BGR2GRAY)
+
+            file_name_path = os.path.join(directory, f"user.{user_id}.{username}.{img_id}.jpg")
+            success = cv2.imwrite(file_name_path, face)
+            if not success:
+                print(f"Failed to save image: {file_name_path}")
+            else:
+                print(f"Image saved: {file_name_path}")
+
+            cv2.putText(face, str(img_id), (50, 50), cv2.FONT_HERSHEY_COMPLEX, 1, (0, 255, 0), 2)
+            cv2.imshow("Cropped face", face)
+
+        if cv2.waitKey(1) == ord('q') or img_id >= 200:
+            break
+
+    cap.release()
+    cv2.destroyAllWindows()
+    print("Collecting samples is completed....")
+
+def train_classifier(data_dir):
+    path = [os.path.join(data_dir, f) for f in os.listdir(data_dir) if f.endswith(('.jpg', '.jpeg', '.png'))]
+
+    faces = []
+    ids = []
+    usernames = {}
+
+    for image in path:
+        img = Image.open(image).convert('L')
+        imageNp = np.array(img, 'uint8')
+        id = int(os.path.split(image)[1].split(".")[1])
+        username = os.path.split(image)[1].split(".")[2]
+
+        faces.append(imageNp)
+        ids.append(id)
+        usernames[id] = username
+
+        print(f"Loaded image: {image} with ID: {id} and username: {username}")  # Debugging info
+
+    ids = np.array(ids)
+
+    clf = cv2.face.LBPHFaceRecognizer_create()
+    clf.train(faces, ids)
+    clf.write("classifier.xml")
+
+    print("Classifier trained with the following users:", usernames)  # Debugging info
+    return usernames
+
+def draw_boundary(img, classifier, scaleFactor, minNeighbors, color, clf, usernames):
+    gray_img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    features = classifier.detectMultiScale(gray_img, scaleFactor, minNeighbors)
+
+    for (x, y, w, h) in features:
+        cv2.rectangle(img, (x, y), (x + w, y + h), color, 2)
+
+        id, pred = clf.predict(gray_img[y:y + h, x:x + w])
+        confidence = int(100 * (1 - pred / 300))
+
+        if confidence > 80 and id in usernames:
+            label = f"{usernames[id]} (ID: {id})"
+        else:
+            label = "UNKNOWN"
+
+        cv2.putText(img, label, (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 1, cv2.LINE_AA)
+
+    return img
+
+if __name__ == "__main__":
+    # First user
+    #user_id1 = int(input("Enter user ID for User 1 (1, 2, 3, ...): "))
+    #username1 = input("Enter username for User 1: ")
+    #generate_dataset(user_id1, username1)
+
+    # Second user
+    #user_id2 = int(input("Enter user ID for User 2 (1, 2, 3, ...): "))
+    #username2 = input("Enter username for User 2: ")
+    #generate_dataset(user_id2, username2)
+
+    faceCascade = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
+    clf = cv2.face.LBPHFaceRecognizer_create()
+    clf.read("classifier.xml")
+
+    usernames = train_classifier("data")
+
+    video_capture = cv2.VideoCapture(0)
+
+    while True:
+        ret, img = video_capture.read()
+        if not ret:
+            print("Failed to capture image.")
+            break
+
+        img = draw_boundary(img, faceCascade, 1.3, 6, (255, 255, 255), clf, usernames)
+        cv2.imshow("Face Detection", img)
+
+        if cv2.waitKey(1) == ord('q'):
+            break
+
+    video_capture.release()
+    cv2.destroyAllWindows()
